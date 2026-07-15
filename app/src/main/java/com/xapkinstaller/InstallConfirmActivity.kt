@@ -4,15 +4,17 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.os.Bundle
+import android.os.Handler
 import android.util.Log
 import androidx.appcompat.app.AlertDialog
 
 /**
  * 接收 PackageInstaller 安装结果的透明 Activity
  *
- * 关键：当系统返回 STATUS_PENDING_USER_ACTION 时，
- * Intent 里会带 EXTRA_INTENT 指向系统安装确认界面。
- * 必须启动它，用户确认后才能真正安装。
+ * 关键修复：
+ * 1. 收到 PENDING_USER_ACTION 后，先把自己拉到前台
+ * 2. confirmIntent 加上 NEW_TASK flag
+ * 3. 用 show()/hide() 确保窗口可见
  */
 class InstallConfirmActivity : Activity() {
 
@@ -24,9 +26,18 @@ class InstallConfirmActivity : Activity() {
     }
 
     private var packageName: String? = null
+    private var pendingConfirmIntent: Intent? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 关键：强制把 Activity 拉到前台
+        val window = this.window
+        window.addFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
 
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
@@ -37,12 +48,16 @@ class InstallConfirmActivity : Activity() {
 
         when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                // 系统要求用户确认 → 获取确认 Intent 并启动
                 val confirmIntent: Intent? = intent.getParcelableExtra(Intent.EXTRA_INTENT)
                 if (confirmIntent != null) {
-                    Log.i(TAG, "启动系统安装确认界面")
-                    startActivityForResult(confirmIntent, REQ_CONFIRM)
-                    return  // 不 finish，等确认结果
+                    Log.i(TAG, "拿到系统确认 Intent: ${confirmIntent.component}")
+                    pendingConfirmIntent = confirmIntent
+
+                    // 延迟 100ms 启动，确保本 Activity 窗口已创建
+                    Handler(mainLooper).postDelayed({
+                        launchConfirm()
+                    }, 100)
+                    return
                 } else {
                     Log.e(TAG, "PENDING_USER_ACTION 但没有 EXTRA_INTENT")
                     showResult(false, "安装失败", "系统未提供安装确认界面")
@@ -56,6 +71,23 @@ class InstallConfirmActivity : Activity() {
                 Log.e(TAG, "安装失败: $errText")
                 showResult(false, "安装失败", errText)
             }
+        }
+    }
+
+    private fun launchConfirm() {
+        val confirmIntent = pendingConfirmIntent ?: run {
+            showResult(false, "安装失败", "确认 Intent 丢失")
+            return
+        }
+
+        try {
+            // 加上 NEW_TASK 确保系统确认界面能弹到前台
+            confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            Log.i(TAG, "启动系统安装确认界面")
+            startActivityForResult(confirmIntent, REQ_CONFIRM)
+        } catch (e: Exception) {
+            Log.e(TAG, "启动确认界面失败", e)
+            showResult(false, "安装失败", "无法启动安装确认: ${e.message}")
         }
     }
 
@@ -73,21 +105,26 @@ class InstallConfirmActivity : Activity() {
     }
 
     private fun showResult(success: Boolean, title: String, message: String) {
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setCancelable(false)
-            .setPositiveButton(if (success) "打开应用" else "好的") { _, _ ->
-                if (success && packageName != null) {
-                    try {
-                        val launch = packageManager.getLaunchIntentForPackage(packageName!!)
-                        if (launch != null) startActivity(launch)
-                    } catch (_: Exception) {}
+        try {
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setCancelable(false)
+                .setPositiveButton(if (success) "打开应用" else "好的") { _, _ ->
+                    if (success && packageName != null) {
+                        try {
+                            val launch = packageManager.getLaunchIntentForPackage(packageName!!)
+                            if (launch != null) startActivity(launch)
+                        } catch (_: Exception) {}
+                    }
+                    finish()
                 }
-                finish()
-            }
-            .setNegativeButton("关闭") { _, _ -> finish() }
-            .show()
+                .setNegativeButton("关闭") { _, _ -> finish() }
+                .show()
+        } catch (e: Exception) {
+            Log.e(TAG, "显示结果对话框失败", e)
+            finish()
+        }
     }
 
     private fun errorText(status: Int, message: String): String = when (status) {
