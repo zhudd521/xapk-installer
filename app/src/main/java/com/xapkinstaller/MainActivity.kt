@@ -191,9 +191,16 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
                 append("\n")
             }
 
-            if (content.apkEntry != null) {
-                append("📱 APK: ${content.apkEntry.name}")
-                append(" (${formatSize(content.apkEntry.size)})\n")
+            if (content.apkEntries.isNotEmpty()) {
+                if (content.apkEntries.size == 1) {
+                    append("📱 APK: ${content.apkEntries.first().name}")
+                    append(" (${formatSize(content.apkEntries.first().size)})\n")
+                } else {
+                    append("📱 APK 分片包 (${content.apkEntries.size}个):\n")
+                    for (apk in content.apkEntries) {
+                        append("  ├ ${apk.name}\n")
+                        append("  └ ${formatSize(apk.size)}\n")
+                    }
             }
 
             if (content.obbEntries.isNotEmpty()) {

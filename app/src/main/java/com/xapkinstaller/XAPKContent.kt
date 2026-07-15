@@ -6,7 +6,7 @@ package com.xapkinstaller
 data class XAPKContent(
     val fileName: String,
     val fileSize: Long,
-    val apkEntry: ZipEntryInfo?,
+    val apkEntries: List<ZipEntryInfo>,    // 所有 APK（支持 split APK）
     val obbEntries: List<ZipEntryInfo>,
     val hasManifestJson: Boolean,
     val packageName: String?,

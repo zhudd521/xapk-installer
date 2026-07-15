@@ -6,14 +6,13 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 /**
  * XAPK 文件解析器
  * XAPK = ZIP 文件，内含：
  *   - AndroidManifest.xml（或 manifest.json）：描述包名、版本
- *   - *.apk：主安装包
+ *   - *.apk：安装包（可能多个，支持 Split APK）
  *   - main.<versionCode>.<packageName>.obb：扩展数据
  *   - patch.<versionCode>.<packageName>.obb：补丁数据
  */
@@ -46,8 +45,8 @@ class XAPKParser(private val context: Context) {
                 if (versionCode == 0) versionCode = null
             }
 
-            // 查找 APK 和 OBB 条目
-            var apkEntry: ZipEntryInfo? = null
+            // 收集所有 APK 和 OBB 条目
+            val apkEntries = mutableListOf<ZipEntryInfo>()
             val obbEntries = mutableListOf<ZipEntryInfo>()
 
             for (entry in entries) {
@@ -61,19 +60,15 @@ class XAPKParser(private val context: Context) {
                 )
 
                 when {
-                    name.endsWith(".apk", ignoreCase = true) -> {
-                        if (apkEntry == null) apkEntry = info
-                    }
-                    name.endsWith(".obb", ignoreCase = true) -> {
-                        obbEntries.add(info)
-                    }
+                    name.endsWith(".apk", ignoreCase = true) -> apkEntries.add(info)
+                    name.endsWith(".obb", ignoreCase = true) -> obbEntries.add(info)
                 }
             }
 
             XAPKContent(
                 fileName = xapkFile.name,
                 fileSize = xapkFile.length(),
-                apkEntry = apkEntry,
+                apkEntries = apkEntries,
                 obbEntries = obbEntries,
                 hasManifestJson = manifestEntry != null,
                 packageName = pkgName,
@@ -88,7 +83,8 @@ class XAPKParser(private val context: Context) {
     fun extractEntry(zipFile: File, entryName: String, destFile: File): Result<File> = runCatching {
         val zip = ZipFile(zipFile)
         zip.use { z ->
-            val entry = z.getEntry(entryName) ?: throw IllegalArgumentException("ZIP 中未找到: $entryName")
+            val entry = z.getEntry(entryName)
+                ?: throw IllegalArgumentException("ZIP 中未找到: $entryName")
             destFile.parentFile?.mkdirs()
             z.getInputStream(entry).use { input ->
                 FileOutputStream(destFile).use { output ->
@@ -103,7 +99,10 @@ class XAPKParser(private val context: Context) {
      * 获取 OBB 目标路径
      */
     fun getObbTargetPath(obbName: String, pkgName: String?): File {
-        val obbBase = File(context.getExternalFilesDir(null)?.parentFile?.parentFile, OBB_DIR)
+        val obbBase = File(
+            context.getExternalFilesDir(null)?.parentFile?.parentFile,
+            OBB_DIR
+        )
         val pkgDir = if (!pkgName.isNullOrBlank()) {
             File(obbBase, pkgName)
         } else {
@@ -114,7 +113,7 @@ class XAPKParser(private val context: Context) {
     }
 
     /**
-     * 检查 XAPK 是否已安装（通过包名检测）
+     * 检查包名是否已安装
      */
     fun isPackageInstalled(pkgName: String): Boolean {
         return try {
