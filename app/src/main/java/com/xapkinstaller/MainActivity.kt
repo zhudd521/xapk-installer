@@ -10,8 +10,6 @@ import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.documentfile.provider.DocumentFile
-import androidx.recyclerview.widget.LinearLayoutManager
 import com.xapkinstaller.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileOutputStream
@@ -44,8 +42,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         installer = InstallerHelper(this)
 
         setupUI()
-
-        // 处理从文件管理器打开的 XAPK
         handleIncomingIntent(intent)
     }
 
@@ -96,7 +92,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
 
         Thread {
             try {
-                // 将 URI 内容复制到缓存目录
                 val cacheFile = copyUriToCache(uri)
                 if (cacheFile == null) {
                     runOnUiThread {
@@ -106,7 +101,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
                     return@Thread
                 }
 
-                // 解析 XAPK
                 val result = parser.parse(cacheFile)
                 if (result.isFailure) {
                     runOnUiThread {
@@ -169,21 +163,14 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
                 if (content.versionCode != null) {
                     append("版本: ${content.versionCode}\n")
                 }
-
-                // 检查是否已安装
                 if (parser.isPackageInstalled(content.packageName)) {
                     val installedVer = parser.getInstalledVersionCode(content.packageName)
                     append("安装状态: ✅ 已安装")
-                    if (installedVer != null) {
-                        append(" (v$installedVer)")
-                    }
+                    if (installedVer != null) append(" (v$installedVer)")
                     append("\n")
                     if (content.versionCode != null && installedVer != null) {
-                        if (content.versionCode > installedVer) {
-                            append("⬆️ 有新版本可用!\n")
-                        } else if (content.versionCode == installedVer) {
-                            append("ℹ️ 版本相同\n")
-                        }
+                        if (content.versionCode > installedVer) append("⬆️ 有新版本可用!\n")
+                        else if (content.versionCode == installedVer) append("ℹ️ 版本相同\n")
                     }
                 } else {
                     append("安装状态: ❌ 未安装\n")
@@ -201,6 +188,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
                         append("  ├ ${apk.name}\n")
                         append("  └ ${formatSize(apk.size)}\n")
                     }
+                }
             }
 
             if (content.obbEntries.isNotEmpty()) {
@@ -219,7 +207,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         binding.fileInfoText.text = info
         binding.currentFilePath.text = filePath
         binding.btnInstall.isEnabled = !isInstalling
-
         showStatus("就绪，可以安装")
     }
 
@@ -246,9 +233,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
     }
 
     override fun onProgress(message: String) {
-        runOnUiThread {
-            showStatus(message)
-        }
+        runOnUiThread { showStatus(message) }
     }
 
     override fun onComplete(content: XAPKContent) {
@@ -256,7 +241,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
             isInstalling = false
             binding.btnInstall.isEnabled = true
             binding.btnInstall.text = "重新安装"
-            showStatus("✅ 安装完成！APK 已启动系统安装器，OBB 已复制到目标目录")
+            showStatus("✅ 安装完成！Split APK 已提交系统安装器，OBB 已复制")
             showToast("安装完成，请在系统安装器中确认")
         }
     }
