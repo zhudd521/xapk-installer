@@ -29,10 +29,12 @@ class InstallResultReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        val pi = android.content.pm.PackageInstaller
-        val status = intent.getIntExtra(pi.EXTRA_STATUS, -999)
-        val statusMessage = intent.getStringExtra(pi.EXTRA_STATUS_MESSAGE) ?: statusText(status)
-        val packageName = intent.getStringExtra(pi.EXTRA_PACKAGE_NAME)
+        val status = intent.getIntExtra(
+            android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
+        val statusMessage = intent.getStringExtra(
+            android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: statusText(status)
+        val packageName = intent.getStringExtra(
+            android.content.pm.PackageInstaller.EXTRA_PACKAGE_NAME)
 
         Log.i(TAG, "安装结果广播: status=$status, msg=$statusMessage, pkg=$packageName")
 
@@ -40,7 +42,7 @@ class InstallResultReceiver : BroadcastReceiver() {
         pendingCallback = null  // 防止泄漏
 
         when (status) {
-            pi.STATUS_SUCCESS -> {
+            android.content.pm.PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(TAG, "安装成功: $packageName")
                 cb?.onInstallSuccess(packageName)
             }
