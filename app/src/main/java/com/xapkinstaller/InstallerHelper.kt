@@ -1,5 +1,6 @@
 package com.xapkinstaller
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
@@ -18,22 +19,32 @@ import java.io.FileInputStream
  * XAPK 安装辅助类
  *
  * 单 APK → ACTION_VIEW + FileProvider
- * Split APK → PackageInstaller.Session + getActivity PendingIntent
+ * Split APK → PackageInstaller.Session
+ *   commit 后系统返回 PENDING_USER_ACTION，
+ *   直接用 Activity.startIntentSenderForResult 启动系统确认界面
+ *   （不经过中间 Activity，避免 HyperOS/MIUI 后台启动限制）
  *
- * 关键：commit() 在主线程执行，确保系统确认界面立即弹出
+ * 关键：commit 的回调不通过 PendingIntent Activity，
+ * 而是通过 Activity.startIntentSenderForResult 直接在前台接收
  */
 class InstallerHelper(private val context: Context) {
 
     companion object {
         private const val TAG = "InstallerHelper"
         private const val INSTALL_DIR = "xapk_extracted"
+        const val REQUEST_INSTALL = 9001
     }
 
     private val parser = XAPKParser(context)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * @param activity 用于 startIntentSenderForResult 的 Activity 引用
+     * @param onInstallResult 安装结果回调（在 onActivityResult 中调用）
+     */
     fun install(
         xapkFile: File,
+        activity: Activity,
         listener: InstallListener
     ) {
         Thread {
@@ -112,24 +123,22 @@ class InstallerHelper(private val context: Context) {
                     Log.i(TAG, "创建 session: $sessionId")
 
                     try {
-                        // 打开 session（不用 use{}，因为 commit 必须在 session 关闭前执行）
                         val session = pkgInstaller.openSession(sessionId)
 
                         // 写入所有 APK
                         for ((i, apkFile) in extractedApks.withIndex()) {
                             listener.onProgress("写入 ${i + 1}/${extractedApks.size}: ${apkFile.name}")
-                            Log.i(TAG, "写入: ${apkFile.name}")
                             session.openWrite(apkFile.name, 0, apkFile.length()).use { out ->
                                 FileInputStream(apkFile).use { it.copyTo(out) }
                             }
                         }
 
-                        // 创建 PendingIntent
-                        val resultIntent = Intent(context, InstallConfirmActivity::class.java).apply {
-                            action = InstallConfirmActivity.ACTION_INSTALL_RESULT
-                            putExtra(InstallConfirmActivity.EXTRA_PACKAGE_NAME, content.packageName)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                        }
+                        // 创建 PendingIntent —— 指向 MainActivity
+                        // 不用 InstallConfirmActivity，直接回 MainActivity
+                        val resultIntent = Intent(context, MainActivity::class.java)
+                        resultIntent.action = MainActivity.ACTION_INSTALL_RESULT
+                        resultIntent.putExtra(MainActivity.EXTRA_PACKAGE_NAME, content.packageName)
+                        resultIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
 
                         val pendingIntent = android.app.PendingIntent.getActivity(
                             context,
@@ -139,21 +148,14 @@ class InstallerHelper(private val context: Context) {
                                 android.app.PendingIntent.FLAG_MUTABLE
                         )
 
-                        // commit 在子线程同步执行
-                        // InstallConfirmActivity 在 onResume 中启动系统确认界面
+                        // commit 后系统会触发 PENDING_USER_ACTION
+                        // 系统会通过 pendingIntent 启动 MainActivity（singleTop），
+                        // 在 onNewIntent 中收到 PENDING_USER_ACTION + EXTRA_INTENT
                         listener.onProgress("提交安装请求...")
-                        try {
-                            session.commit(pendingIntent.intentSender)
-                            Log.i(TAG, "Session 已 commit")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "commit 失败", e)
-                            try { session.close() } catch (_: Exception) {}
-                            try { pkgInstaller.abandonSession(sessionId) } catch (_: Exception) {}
-                            listener.onError("提交安装失败: ${e.message}")
-                            return@Thread
-                        }
+                        session.commit(pendingIntent.intentSender)
+                        Log.i(TAG, "Session 已 commit")
 
-                        listener.onProgress("安装请求已提交，请在弹出的界面确认安装...")
+                        listener.onProgress("正在等待系统安装确认...")
 
                     } catch (e: Exception) {
                         Log.e(TAG, "Session 失败", e)

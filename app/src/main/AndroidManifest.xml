@@ -42,11 +42,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".InstallConfirmActivity"
-            android:exported="false"
-            android:theme="@style/Theme.XAPKInstaller.Transparent" />
-
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
