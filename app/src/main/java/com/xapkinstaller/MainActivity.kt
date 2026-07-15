@@ -140,8 +140,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         }
 
         if (content.apkEntries.size == 1) {
-            val a = content.apkEntries.first()
-            sb.appendLine("📱 APK: ${a.name} (${formatSize(a.size)})")
+            sb.appendLine("📱 APK: ${content.apkEntries.first().name} (${formatSize(content.apkEntries.first().size)})")
         } else {
             sb.appendLine("📱 Split APK (${content.apkEntries.size}个):")
             content.apkEntries.forEach { sb.appendLine("  ├ ${it.name} (${formatSize(it.size)})") }
@@ -162,7 +161,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
     // ─── 安装 ────────────────────────────────────────────
 
     private fun startInstall(file: File) {
-        // 检查安装权限
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !packageManager.canRequestPackageInstalls()
         ) {
@@ -209,13 +207,12 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
     }
 
     override fun onComplete(content: XAPKContent) {
-        // 单 APK：系统安装器已弹出
         runOnUiThread {
             isInstalling = false
             binding.btnInstall.isEnabled = true
             binding.btnInstall.text = "重新安装"
             binding.progressBar.visibility = View.GONE
-            showStatus("请在系统安装界面确认安装")
+            showStatus("系统安装器已打开，请在弹出的界面确认安装")
         }
     }
 
