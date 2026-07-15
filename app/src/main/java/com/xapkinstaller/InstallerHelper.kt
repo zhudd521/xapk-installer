@@ -202,12 +202,13 @@ class InstallerHelper(private val context: Context) {
      */
     private fun createCommitCallback(listener: InstallListener): android.app.PendingIntent {
         val intent = Intent(context, InstallResultReceiver::class.java)
+        // 必须用 FLAG_MUTABLE：PackageInstaller 需要可变 PendingIntent 回传安装结果
         return android.app.PendingIntent.getBroadcast(
             context,
             0,
             intent,
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or
-                android.app.PendingIntent.FLAG_IMMUTABLE
+                android.app.PendingIntent.FLAG_MUTABLE
         )
     }
 
