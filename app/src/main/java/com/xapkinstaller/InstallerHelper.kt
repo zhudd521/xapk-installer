@@ -156,7 +156,7 @@ class InstallerHelper(private val context: Context) {
             val intent = Intent(context, InstallResultReceiver::class.java).apply {
                 action = InstallResultReceiver.ACTION_INSTALL_COMPLETE
             }
-            InstallResultReceiver.pendingCallback = object : InstallResultReceiver.InstallCallback {
+            InstallResultReceiver.pendingCallback = object : InstallCallback {
                 override fun onInstallSuccess(pkg: String?) {
                     mainHandler.post { callback?.invoke(0, "安装成功", pkg) }
                 }
