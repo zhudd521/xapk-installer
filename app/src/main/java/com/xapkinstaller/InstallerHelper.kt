@@ -105,8 +105,11 @@ class InstallerHelper(private val context: Context) {
                 }
 
                 listener.onComplete(content)
-            }.apply { start() }
-        }
+            } catch (e: Exception) {
+                listener.onError("安装失败: ${e.message}")
+                Log.e(TAG, "安装失败", e)
+            }
+        }.apply { start() }
     }
 
     /**
