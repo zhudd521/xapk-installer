@@ -6,7 +6,7 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * Split APK 安装结果回调（Activity 实现此接口接收结果）
+ * Split APK 安装结果回调
  */
 interface InstallCallback {
     fun onInstallSuccess(packageName: String?)
@@ -14,8 +14,7 @@ interface InstallCallback {
 }
 
 /**
- * 接收 PackageInstaller.Session 的安装结果广播
- * 动态注册在 Activity 中，不在 Manifest 静态声明
+ * 接收 PackageInstaller 安装结果广播
  */
 class InstallResultReceiver : BroadcastReceiver() {
 
@@ -23,7 +22,6 @@ class InstallResultReceiver : BroadcastReceiver() {
         private const val TAG = "InstallResultReceiver"
         const val ACTION_INSTALL_COMPLETE = "com.xapkinstaller.INSTALL_COMPLETE"
 
-        // 单实例回调，commit 前设置
         @Volatile
         var pendingCallback: InstallCallback? = null
     }
@@ -36,10 +34,10 @@ class InstallResultReceiver : BroadcastReceiver() {
         val packageName = intent.getStringExtra(
             android.content.pm.PackageInstaller.EXTRA_PACKAGE_NAME)
 
-        Log.i(TAG, "安装结果广播: status=$status, msg=$statusMessage, pkg=$packageName")
+        Log.i(TAG, "安装结果: status=$status, msg=$statusMessage, pkg=$packageName")
 
         val cb = pendingCallback
-        pendingCallback = null  // 防止泄漏
+        pendingCallback = null
 
         when (status) {
             android.content.pm.PackageInstaller.STATUS_SUCCESS -> {
@@ -56,9 +54,9 @@ class InstallResultReceiver : BroadcastReceiver() {
     private fun statusText(status: Int): String = when (status) {
         android.content.pm.PackageInstaller.STATUS_SUCCESS -> "安装成功"
         android.content.pm.PackageInstaller.STATUS_FAILURE -> "安装失败"
-        android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED -> "安装已中止"
+        android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED -> "安装已取消"
         android.content.pm.PackageInstaller.STATUS_FAILURE_BLOCKED -> "安装被阻止"
-        android.content.pm.PackageInstaller.STATUS_FAILURE_CONFLICT -> "安装冲突（可能已安装签名不同的同名版本）"
+        android.content.pm.PackageInstaller.STATUS_FAILURE_CONFLICT -> "安装冲突（可能已存在签名不同的同名应用）"
         android.content.pm.PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "安装包与系统不兼容"
         android.content.pm.PackageInstaller.STATUS_FAILURE_INVALID -> "安装包无效"
         android.content.pm.PackageInstaller.STATUS_FAILURE_STORAGE -> "存储空间不足"

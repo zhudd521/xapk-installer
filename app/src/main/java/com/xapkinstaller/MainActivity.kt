@@ -30,7 +30,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
 
     private val installPermLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* 权限结果 */ }
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,9 +40,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         parser = XAPKParser(this)
         installer = InstallerHelper(this)
 
-        // 动态注册安装结果广播接收器
         registerInstallReceiver()
-
         setupUI()
         handleIncomingIntent(intent)
     }
@@ -67,8 +65,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         handleIncomingIntent(intent)
     }
 
-    // ─── UI 设置 ────────────────────────────────────────
-
     private fun setupUI() {
         binding.btnSelectFile.setOnClickListener {
             if (checkStoragePermission()) openFilePicker()
@@ -83,8 +79,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         }
         binding.btnSelectFile.performClick()
     }
-
-    // ─── 文件选择与解析 ─────────────────────────────────
 
     private fun handleIncomingIntent(intent: Intent?) {
         intent?.data?.let { handleXAPKUri(it) }
@@ -143,8 +137,6 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         return null
     }
 
-    // ─── 信息展示 ────────────────────────────────────────
-
     private fun displayContent(content: XAPKContent, filePath: String) {
         val sb = StringBuilder()
         sb.appendLine("📦 ${content.fileName}")
@@ -170,7 +162,7 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
             sb.appendLine("📱 APK: ${a.name} (${formatSize(a.size)})")
         } else {
             sb.appendLine("📱 APK 分片包 (${content.apkEntries.size}个):")
-            content.apkEntries.forEach { sb.appendLine("  ├ ${it.name}") }
+            content.apkEntries.forEach { sb.appendLine("  ├ ${it.name} (${formatSize(it.size)})") }
         }
 
         if (content.obbEntries.isNotEmpty()) {
@@ -182,42 +174,42 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         binding.fileInfoText.text = sb.toString()
         binding.currentFilePath.text = filePath
         binding.btnInstall.isEnabled = !isInstalling
-        showStatus("就绪，可以安装")
+        showStatus("就绪，点击安装按钮开始")
     }
-
-    // ─── 安装流程 ────────────────────────────────────────
 
     private fun startInstall(file: File) {
         isInstalling = true
         binding.btnInstall.isEnabled = false
         binding.btnInstall.text = "安装中..."
+        binding.progressBar.visibility = View.VISIBLE
 
-        installer.install(file, this) { status, message, pkgName ->
-            // Split APK 安装结果回调（在主线程）
+        installer.install(file, this) { success, message, pkgName ->
+            // Split APK 安装结果（从广播回调）
             runOnUiThread {
                 isInstalling = false
                 binding.btnInstall.isEnabled = true
                 binding.btnInstall.text = "重新安装"
+                binding.progressBar.visibility = View.GONE
 
-                if (status == 0) {
+                if (success) {
                     showStatus("✅ 安装成功！")
                     AlertDialog.Builder(this)
-                        .setTitle("安装完成")
-                        .setMessage("${pkgName ?: "应用"} 安装成功！\n可在桌面或应用列表中找到。")
+                        .setTitle("安装成功")
+                        .setMessage("${pkgName ?: "应用"} 已安装成功！\n点击下方按钮直接打开。")
                         .setPositiveButton("打开应用") { _, _ ->
                             try {
                                 val launchIntent = packageManager.getLaunchIntentForPackage(pkgName ?: "")
                                 if (launchIntent != null) startActivity(launchIntent)
-                                else showToast("无法找到启动入口")
+                                else showToast("无法找到应用启动入口")
                             } catch (_: Exception) { showToast("无法启动应用") }
                         }
-                        .setNegativeButton("好的", null)
+                        .setNegativeButton("关闭", null)
                         .show()
                 } else {
-                    showStatus("❌ 安装失败")
+                    showStatus("❌ $message")
                     AlertDialog.Builder(this)
                         .setTitle("安装失败")
-                        .setMessage("错误码: $status\n$message")
+                        .setMessage(message)
                         .setPositiveButton("好的", null)
                         .show()
                 }
@@ -239,15 +231,20 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         return true
     }
 
-    // ─── InstallListener 回调 ────────────────────────────
-
+    // ── InstallListener ──
     override fun onProgress(message: String) {
         runOnUiThread { showStatus(message) }
     }
 
     override fun onComplete(content: XAPKContent) {
-        // 单 APK 路径到此 (系统安装器已弹出)
-        // Split APK 路径也有此回调，但真正结果在 sessionCallback 中
+        // 单 APK 路径：系统安装器已弹出
+        runOnUiThread {
+            isInstalling = false
+            binding.btnInstall.isEnabled = true
+            binding.btnInstall.text = "重新安装"
+            binding.progressBar.visibility = View.GONE
+            showStatus("已在系统安装器中打开，请在弹出的对话框中确认安装")
+        }
     }
 
     override fun onError(message: String) {
@@ -255,12 +252,11 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
             isInstalling = false
             binding.btnInstall.isEnabled = true
             binding.btnInstall.text = "安装"
+            binding.progressBar.visibility = View.GONE
             showStatus("❌ $message")
             showToast(message)
         }
     }
-
-    // ─── 辅助 ────────────────────────────────────────────
 
     private fun showStatus(text: String) { binding.statusText.text = text }
     private fun showToast(text: String) { Toast.makeText(this, text, Toast.LENGTH_SHORT).show() }
