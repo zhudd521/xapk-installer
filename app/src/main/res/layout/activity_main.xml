@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    android:background="?attr/colorSurface">
+
+    <!-- 顶部标题栏 -->
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="0dp"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        app:title="@string/app_name"
+        app:titleCentered="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 选择文件按钮 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_select_file"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:text="📂 选择 XAPK 文件"
+        app:icon="@android:drawable/ic_menu_upload"
+        app:iconGravity="textStart"
+        style="@style/Widget.Material3.Button.Tonal"
+        app:layout_constraintTop_toBottomOf="@+id/toolbar"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="8dp" />
+
+    <!-- 当前文件路径 -->
+    <TextView
+        android:id="@+id/current_file_path"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:textSize="11sp"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:maxLines="2"
+        android:ellipsize="middle"
+        android:padding="4dp"
+        app:layout_constraintTop_toBottomOf="@+id/btn_select_file"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 进度条 -->
+    <ProgressBar
+        android:id="@+id/progress_bar"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:visibility="gone"
+        android:indeterminate="true"
+        app:layout_constraintTop_toBottomOf="@+id/current_file_path"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="16dp" />
+
+    <!-- 文件信息卡片 -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/file_info_card"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:cardElevation="0dp"
+        app:strokeWidth="1dp"
+        app:strokeColor="?attr/colorOutline"
+        app:contentPadding="12dp"
+        android:layout_marginTop="12dp"
+        app:layout_constraintTop_toBottomOf="@+id/progress_bar"
+        app:layout_constraintBottom_toTopOf="@+id/status_text"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <TextView
+                android:id="@+id/file_info_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="13sp"
+                android:textColor="?attr/colorOnSurface"
+                android:lineSpacingExtra="4dp"
+                android:text="等待选择 XAPK 文件..." />
+
+        </ScrollView>
+
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- 状态文本 -->
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="13sp"
+        android:paddingVertical="8dp"
+        android:text=""
+        app:layout_constraintBottom_toTopOf="@+id/btn_install"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 安装按钮 -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_install"
+        android:layout_width="0dp"
+        android:layout_height="56dp"
+        android:text="安装"
+        android:enabled="false"
+        app:icon="@android:drawable/ic_menu_manage"
+        style="@style/Widget.Material3.Button.Filled"
+        android:layout_marginBottom="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
