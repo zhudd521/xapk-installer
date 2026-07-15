@@ -139,26 +139,21 @@ class InstallerHelper(private val context: Context) {
                                 android.app.PendingIntent.FLAG_MUTABLE
                         )
 
-                        // 在主线程执行 commit，确保系统确认界面立即弹出
+                        // commit 在子线程同步执行
+                        // InstallConfirmActivity 在 onResume 中启动系统确认界面
                         listener.onProgress("提交安装请求...")
-                        val intentSender = pendingIntent.intentSender
-
-                        mainHandler.post {
-                            try {
-                                // commit 后 session 会被系统接管，不需要手动 close
-                                session.commit(intentSender)
-                                Log.i(TAG, "Session 已 commit")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "commit 失败", e)
-                                try { session.close() } catch (_: Exception) {}
-                                try { pkgInstaller.abandonSession(sessionId) } catch (_: Exception) {}
-                                listener.onError("提交安装失败: ${e.message}")
-                            }
+                        try {
+                            session.commit(pendingIntent.intentSender)
+                            Log.i(TAG, "Session 已 commit")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "commit 失败", e)
+                            try { session.close() } catch (_: Exception) {}
+                            try { pkgInstaller.abandonSession(sessionId) } catch (_: Exception) {}
+                            listener.onError("提交安装失败: ${e.message}")
+                            return@Thread
                         }
 
-                        mainHandler.post {
-                            listener.onProgress("安装请求已提交，请在弹出的界面确认安装...")
-                        }
+                        listener.onProgress("安装请求已提交，请在弹出的界面确认安装...")
 
                     } catch (e: Exception) {
                         Log.e(TAG, "Session 失败", e)

@@ -5,16 +5,16 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.WindowManager
 import androidx.appcompat.app.AlertDialog
 
 /**
  * 接收 PackageInstaller 安装结果的透明 Activity
  *
- * 关键修复：
- * 1. 收到 PENDING_USER_ACTION 后，先把自己拉到前台
- * 2. confirmIntent 加上 NEW_TASK flag
- * 3. 用 show()/hide() 确保窗口可见
+ * 核心问题：系统通过 PendingIntent 在后台启动此 Activity，
+ * 某些 ROM 不会把它立即拉到前台。需要主动抢焦点。
  */
 class InstallConfirmActivity : Activity() {
 
@@ -31,12 +31,12 @@ class InstallConfirmActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 关键：强制把 Activity 拉到前台
-        val window = this.window
+        // 强制窗口可见
         window.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-            android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         )
 
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)
@@ -50,16 +50,12 @@ class InstallConfirmActivity : Activity() {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 val confirmIntent: Intent? = intent.getParcelableExtra(Intent.EXTRA_INTENT)
                 if (confirmIntent != null) {
-                    Log.i(TAG, "拿到系统确认 Intent: ${confirmIntent.component}")
+                    Log.i(TAG, "拿到系统确认 Intent")
                     pendingConfirmIntent = confirmIntent
-
-                    // 延迟 100ms 启动，确保本 Activity 窗口已创建
-                    Handler(mainLooper).postDelayed({
-                        launchConfirm()
-                    }, 100)
+                    // 不在 onCreate 里直接启动，等 onResume 再启动
+                    // 这样确保 Activity 窗口已经显示
                     return
                 } else {
-                    Log.e(TAG, "PENDING_USER_ACTION 但没有 EXTRA_INTENT")
                     showResult(false, "安装失败", "系统未提供安装确认界面")
                 }
             }
@@ -67,27 +63,30 @@ class InstallConfirmActivity : Activity() {
                 showResult(true, "安装成功", "$packageName 已安装成功！")
             }
             else -> {
-                val errText = errorText(status, message)
-                Log.e(TAG, "安装失败: $errText")
-                showResult(false, "安装失败", errText)
+                showResult(false, "安装失败", errorText(status, message))
             }
         }
     }
 
-    private fun launchConfirm() {
-        val confirmIntent = pendingConfirmIntent ?: run {
-            showResult(false, "安装失败", "确认 Intent 丢失")
-            return
-        }
+    override fun onResume() {
+        super.onResume()
+        Log.i(TAG, "onResume")
 
-        try {
-            // 加上 NEW_TASK 确保系统确认界面能弹到前台
-            confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            Log.i(TAG, "启动系统安装确认界面")
-            startActivityForResult(confirmIntent, REQ_CONFIRM)
-        } catch (e: Exception) {
-            Log.e(TAG, "启动确认界面失败", e)
-            showResult(false, "安装失败", "无法启动安装确认: ${e.message}")
+        // 如果有待启动的确认 Intent，在这里启动
+        // 此时 Activity 窗口已经创建并可见，系统确认界面能正确弹到前台
+        pendingConfirmIntent?.let { confirmIntent ->
+            pendingConfirmIntent = null  // 防止重复启动
+            try {
+                confirmIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+                Log.i(TAG, "onResume 中启动系统安装确认界面")
+                startActivityForResult(confirmIntent, REQ_CONFIRM)
+            } catch (e: Exception) {
+                Log.e(TAG, "启动确认界面失败", e)
+                showResult(false, "安装失败", "无法启动安装确认: ${e.message}")
+            }
         }
     }
 
@@ -122,7 +121,7 @@ class InstallConfirmActivity : Activity() {
                 .setNegativeButton("关闭") { _, _ -> finish() }
                 .show()
         } catch (e: Exception) {
-            Log.e(TAG, "显示结果对话框失败", e)
+            Log.e(TAG, "显示对话框失败", e)
             finish()
         }
     }
@@ -131,8 +130,8 @@ class InstallConfirmActivity : Activity() {
         PackageInstaller.STATUS_FAILURE -> "安装失败${if (message.isNotBlank()) ": $message" else ""}"
         PackageInstaller.STATUS_FAILURE_ABORTED -> "安装已取消"
         PackageInstaller.STATUS_FAILURE_BLOCKED -> "安装被阻止"
-        PackageInstaller.STATUS_FAILURE_CONFLICT -> "安装冲突（可能已存在签名不同的同名应用，请先卸载旧版）"
-        PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "安装包与系统不兼容 (status=$status)"
+        PackageInstaller.STATUS_FAILURE_CONFLICT -> "安装冲突（请先卸载旧版）"
+        PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "安装包与系统不兼容 (code=$status)"
         PackageInstaller.STATUS_FAILURE_INVALID -> "安装包无效"
         PackageInstaller.STATUS_FAILURE_STORAGE -> "存储空间不足"
         else -> "未知错误 (code=$status)${if (message.isNotBlank()) ": $message" else ""}"
