@@ -24,10 +24,6 @@
         android:theme="@style/Theme.XAPKInstaller"
         android:requestLegacyExternalStorage="true">
 
-        <receiver
-            android:name=".InstallResultReceiver"
-            android:exported="false" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"

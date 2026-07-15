@@ -10,33 +10,36 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
 
 /**
  * XAPK 安装辅助类
- * 支持 Split APK 批量安装（通过 PackageInstaller.Session）
+ * - 单 APK：系统安装器 ACTION_VIEW
+ * - 多 APK（Split）：PackageInstaller.Session 批量写入 + commit
  */
 class InstallerHelper(private val context: Context) {
 
     companion object {
         private const val TAG = "InstallerHelper"
         private const val INSTALL_DIR = "xapk_extracted"
-        private const val SESSION_NAME = "XAPK Installer"
     }
 
     private val parser = XAPKParser(context)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * 安装 XAPK 文件（完整流程）
-     * 自动识别 Split APK 并使用 PackageInstaller.Session 批量安装
+     * @param sessionCallback 仅 Split APK 安装时生效：commit 结果通过此回调返回
      */
-    fun install(xapkFile: File, listener: InstallListener) {
+    fun install(
+        xapkFile: File,
+        listener: InstallListener,
+        sessionCallback: ((status: Int, message: String, packageName: String?) -> Unit)? = null
+    ) {
         Thread {
             try {
                 listener.onProgress("正在解析 XAPK 文件...")
-
-                // 解析 XAPK
                 val parseResult = parser.parse(xapkFile)
                 if (parseResult.isFailure) {
                     listener.onError("解析失败: ${parseResult.exceptionOrNull()?.message}")
@@ -44,7 +47,6 @@ class InstallerHelper(private val context: Context) {
                 }
 
                 val content = parseResult.getOrThrow()
-
                 if (content.apkEntries.isEmpty()) {
                     listener.onError("XAPK 中未找到 APK 文件")
                     return@Thread
@@ -52,47 +54,54 @@ class InstallerHelper(private val context: Context) {
 
                 Log.i(TAG, "发现 ${content.apkEntries.size} 个 APK: ${content.apkEntries.joinToString { it.name }}")
 
-                // 创建临时目录
+                // 创建临时目录并提取所有 APK
                 val installDir = File(context.cacheDir, INSTALL_DIR)
                 installDir.deleteRecursively()
                 installDir.mkdirs()
 
-                // 提取所有 APK 到临时目录
                 val extractedApks = mutableListOf<File>()
                 for (apk in content.apkEntries) {
                     listener.onProgress("正在提取: ${apk.name}")
                     val apkFile = File(installDir, apk.name)
-                    val extractResult = parser.extractEntry(xapkFile, apk.name, apkFile)
-                    if (extractResult.isFailure) {
-                        listener.onError("${apk.name} 提取失败: ${extractResult.exceptionOrNull()?.message}")
+                    val result = parser.extractEntry(xapkFile, apk.name, apkFile)
+                    if (result.isFailure) {
+                        listener.onError("${apk.name} 提取失败: ${result.exceptionOrNull()?.message}")
                         return@Thread
                     }
                     extractedApks.add(apkFile)
-                    Log.i(TAG, "已提取: ${apkFile.absolutePath} (${apkFile.length()} bytes)")
                 }
 
-                // 根据 APK 数量选择安装方式
+                // 检查安装来源权限
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !context.packageManager.canRequestPackageInstalls()
+                ) {
+                    mainHandler.post {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:${context.packageName}")
+                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        context.startActivity(intent)
+                    }
+                    listener.onError("请在设置中允许安装未知应用后重试")
+                    return@Thread
+                }
+
                 if (extractedApks.size == 1) {
-                    // 单个 APK：直接使用系统安装器
+                    // 单 APK → 系统安装器
                     listener.onProgress("正在启动系统安装器...")
-                    installSingleApk(extractedApks.first(), listener)
+                    installSingleApk(extractedApks.first())
                 } else {
-                    // 多个 APK：使用 PackageInstaller.Session 批量安装
-                    listener.onProgress("正在准备 Split APK 安装...")
-                    installSplitApks(extractedApks, content.packageName, listener)
+                    // 多 APK → PackageInstaller.Session
+                    listener.onProgress("正在提交 Split APK 安装请求...")
+                    installSplitApks(extractedApks, content.packageName, sessionCallback)
                 }
 
-                // 安装 OBB
+                // 复制 OBB
                 if (content.obbEntries.isNotEmpty()) {
-                    listener.onProgress("正在安装 OBB 扩展数据...")
+                    listener.onProgress("正在复制 OBB 扩展数据...")
                     for (obb in content.obbEntries) {
                         val obbTarget = parser.getObbTargetPath(obb.name, content.packageName)
-                        val obbResult = parser.extractEntry(xapkFile, obb.name, obbTarget)
-                        if (obbResult.isSuccess) {
-                            Log.i(TAG, "OBB 已复制: ${obbTarget.absolutePath}")
-                        } else {
-                            Log.w(TAG, "OBB 复制失败: ${obb.name}")
-                        }
+                        parser.extractEntry(xapkFile, obb.name, obbTarget)
                     }
                 }
 
@@ -104,136 +113,74 @@ class InstallerHelper(private val context: Context) {
         }.apply { start() }
     }
 
-    /**
-     * 安装单个 APK（系统安装器）
-     */
-    private fun installSingleApk(apkFile: File, listener: InstallListener) {
-        try {
-            // 检查安装未知来源权限
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.packageManager.canRequestPackageInstalls()) {
-                    val settingsIntent = Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${context.packageName}")
-                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                    context.startActivity(settingsIntent)
-                    listener.onProgress("请在设置中允许安装未知应用")
-                    return
-                }
-            }
-
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apkFile
-            )
-
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "启动安装器失败", e)
-            throw e
+    private fun installSingleApk(apkFile: File) {
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apkFile
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
         }
+        context.startActivity(intent)
     }
 
-    /**
-     * 使用 PackageInstaller.Session 批量安装 Split APK
-     */
     private fun installSplitApks(
         apkFiles: List<File>,
         packageName: String?,
-        listener: InstallListener
+        callback: ((status: Int, message: String, packageName: String?) -> Unit)?
     ) {
-        val installer = context.packageManager.packageInstaller
-        val sessionParams = PackageInstaller.SessionParams(
-            PackageInstaller.SessionParams.MODE_FULL_INSTALL
-        )
+        val pm = context.packageManager
+        val installer = pm.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
 
-        // Android 5.0+ 支持
-        val sessionId = installer.createSession(sessionParams)
-        Log.i(TAG, "创建安装会话: $sessionId, ${apkFiles.size} 个 APK")
+        val sessionId = installer.createSession(params)
+        Log.i(TAG, "创建安装会话: sessionId=$sessionId, ${apkFiles.size} 个 APK")
 
         try {
+            // 写入所有 APK
             installer.openSession(sessionId).use { session ->
-                // 逐个写入 APK
                 for ((index, apkFile) in apkFiles.withIndex()) {
                     val name = apkFile.name
-                    listener.onProgress("写入 $name (${index + 1}/${apkFiles.size})...")
-
-                    val sizeBytes = apkFile.length()
-                    session.openWrite(name, 0, sizeBytes).use { out ->
+                    Log.i(TAG, "写入 $name (${index + 1}/${apkFiles.size})")
+                    session.openWrite(name, 0, apkFile.length()).use { out ->
                         FileInputStream(apkFile).use { input ->
-                            val buffer = ByteArray(65536)
-                            var written = 0L
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read == -1) break
-                                out.write(buffer, 0, read)
-                                written += read
-                            }
+                            input.copyTo(out)
                         }
                     }
-
-                    Log.i(TAG, "已写入: $name (${sizeBytes} bytes)")
                 }
             }
 
-            // 提交安装（通过 PendingIntent 回调结果）
-            val intentSender = createCommitCallback(listener).intentSender
-            installer.openSession(sessionId).use { session ->
-                session.commit(intentSender)
+            // 设置结果回调 → 写入 InstallResultReceiver.pendingCallback
+            val intent = Intent(context, InstallResultReceiver::class.java).apply {
+                action = InstallResultReceiver.ACTION_INSTALL_COMPLETE
+            }
+            InstallResultReceiver.pendingCallback = object : InstallResultReceiver.InstallCallback {
+                override fun onInstallSuccess(pkg: String?) {
+                    mainHandler.post { callback?.invoke(0, "安装成功", pkg) }
+                }
+                override fun onInstallError(permErr: Int, errCode: Int, msg: String) {
+                    mainHandler.post { callback?.invoke(errCode, msg, packageName) }
+                }
             }
 
-            Log.i(TAG, "安装提交成功")
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                context,
+                sessionId,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_MUTABLE
+            )
+
+            installer.openSession(sessionId).use { session ->
+                session.commit(pendingIntent.intentSender)
+            }
+            Log.i(TAG, "Split APK 安装已提交")
         } catch (e: Exception) {
-            Log.e(TAG, "Split APK 安装失败", e)
-            // 尝试终止会话
+            Log.e(TAG, "Split APK 写入/提交失败", e)
             try { installer.abandonSession(sessionId) } catch (_: Exception) {}
             throw e
-        }
-    }
-
-    /**
-     * 创建安装完成的回调 Intent
-     */
-    private fun createCommitCallback(listener: InstallListener): android.app.PendingIntent {
-        val intent = Intent(context, InstallResultReceiver::class.java)
-        // 必须用 FLAG_MUTABLE：PackageInstaller 需要可变 PendingIntent 回传安装结果
-        return android.app.PendingIntent.getBroadcast(
-            context,
-            0,
-            intent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or
-                android.app.PendingIntent.FLAG_MUTABLE
-        )
-    }
-
-    /**
-     * 请求必要权限
-     */
-    fun requestPermissionsIfNeeded(activity: androidx.fragment.app.FragmentActivity) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:${context.packageName}")
-                )
-                activity.startActivity(intent)
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val permissions = mutableListOf<String>()
-            if (context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                permissions.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-            if (permissions.isNotEmpty()) {
-                activity.requestPermissions(permissions.toTypedArray(), 100)
-            }
         }
     }
 

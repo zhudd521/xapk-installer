@@ -1,6 +1,7 @@
 package com.xapkinstaller
 
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -9,6 +10,7 @@ import android.provider.Settings
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.xapkinstaller.databinding.ActivityMainBinding
 import java.io.File
@@ -20,18 +22,15 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
     private lateinit var parser: XAPKParser
     private lateinit var installer: InstallerHelper
     private var isInstalling = false
+    private var installResultReceiver: InstallResultReceiver? = null
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { handleXAPKUri(it) }
-    }
+    ) { uri: Uri? -> uri?.let { handleXAPKUri(it) } }
 
-    private val installPermissionLauncher = registerForActivityResult(
+    private val installPermLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
-        // 权限授予后自动继续
-    }
+    ) { /* 权限结果 */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,8 +40,26 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         parser = XAPKParser(this)
         installer = InstallerHelper(this)
 
+        // 动态注册安装结果广播接收器
+        registerInstallReceiver()
+
         setupUI()
         handleIncomingIntent(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { installResultReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+    }
+
+    private fun registerInstallReceiver() {
+        installResultReceiver = InstallResultReceiver()
+        val filter = IntentFilter(InstallResultReceiver.ACTION_INSTALL_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(installResultReceiver, filter, RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(installResultReceiver, filter)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -50,39 +67,32 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         handleIncomingIntent(intent)
     }
 
+    // ─── UI 设置 ────────────────────────────────────────
+
     private fun setupUI() {
         binding.btnSelectFile.setOnClickListener {
-            if (checkStoragePermission()) {
-                openFilePicker()
-            }
+            if (checkStoragePermission()) openFilePicker()
         }
-
         binding.btnInstall.setOnClickListener {
-            val filePath = binding.currentFilePath.text.toString()
-            if (filePath.isNotBlank() && !isInstalling) {
-                val file = File(filePath)
-                if (file.exists()) {
-                    startInstall(file)
-                } else {
-                    showToast("文件不存在")
-                }
+            val path = binding.currentFilePath.text.toString()
+            if (path.isNotBlank() && !isInstalling) {
+                val file = File(path)
+                if (file.exists()) startInstall(file)
+                else showToast("文件不存在")
             }
         }
-
         binding.btnSelectFile.performClick()
     }
 
+    // ─── 文件选择与解析 ─────────────────────────────────
+
     private fun handleIncomingIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
-        handleXAPKUri(uri)
+        intent?.data?.let { handleXAPKUri(it) }
     }
 
     private fun openFilePicker() {
-        try {
-            filePickerLauncher.launch(arrayOf("*/*"))
-        } catch (e: Exception) {
-            showToast("无法打开文件选择器")
-        }
+        try { filePickerLauncher.launch(arrayOf("*/*")) }
+        catch (_: Exception) { showToast("无法打开文件选择器") }
     }
 
     private fun handleXAPKUri(uri: Uri) {
@@ -92,158 +102,152 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
 
         Thread {
             try {
-                val cacheFile = copyUriToCache(uri)
-                if (cacheFile == null) {
-                    runOnUiThread {
-                        showStatus("无法读取文件")
-                        binding.progressBar.visibility = View.GONE
-                    }
+                val cacheFile = copyUriToCache(uri) ?: run {
+                    runOnUiThread { showStatus("无法读取文件"); binding.progressBar.visibility = View.GONE }
                     return@Thread
                 }
-
                 val result = parser.parse(cacheFile)
                 if (result.isFailure) {
-                    runOnUiThread {
-                        showStatus("解析失败: ${result.exceptionOrNull()?.message}")
-                        binding.progressBar.visibility = View.GONE
-                    }
+                    runOnUiThread { showStatus("解析失败: ${result.exceptionOrNull()?.message}"); binding.progressBar.visibility = View.GONE }
                     return@Thread
                 }
-
                 val content = result.getOrThrow()
                 runOnUiThread {
-                    displayXAPKContent(content, cacheFile.absolutePath)
+                    displayContent(content, cacheFile.absolutePath)
                     binding.progressBar.visibility = View.GONE
                 }
             } catch (e: Exception) {
-                runOnUiThread {
-                    showStatus("处理文件时出错: ${e.message}")
-                    binding.progressBar.visibility = View.GONE
-                }
+                runOnUiThread { showStatus("出错: ${e.message}"); binding.progressBar.visibility = View.GONE }
             }
         }.start()
     }
 
     private fun copyUriToCache(uri: Uri): File? {
         return try {
-            val inputStream = contentResolver.openInputStream(uri) ?: return null
-            val fileName = getFileNameFromUri(uri) ?: "package_${System.currentTimeMillis()}.xapk"
-            val cacheFile = File(cacheDir, fileName)
-            FileOutputStream(cacheFile).use { output ->
-                inputStream.copyTo(output)
-            }
-            inputStream.close()
-            cacheFile
-        } catch (e: Exception) {
-            null
-        }
+            val input = contentResolver.openInputStream(uri) ?: return null
+            val name = getFileName(uri) ?: "package_${System.currentTimeMillis()}.xapk"
+            val file = File(cacheDir, name)
+            FileOutputStream(file).use { input.copyTo(it) }
+            input.close()
+            file
+        } catch (_: Exception) { null }
     }
 
-    private fun getFileNameFromUri(uri: Uri): String? {
-        var name: String? = null
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0) {
-                    name = it.getString(nameIndex)
-                }
+    private fun getFileName(uri: Uri): String? {
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) return cursor.getString(idx)
             }
         }
-        return name
+        return null
     }
 
-    private fun displayXAPKContent(content: XAPKContent, filePath: String) {
-        val info = buildString {
-            append("📦 ${content.fileName}\n")
-            append("大小: ${formatSize(content.fileSize)}\n\n")
+    // ─── 信息展示 ────────────────────────────────────────
 
-            if (content.packageName != null) {
-                append("📱 包名: ${content.packageName}\n")
-                if (content.versionCode != null) {
-                    append("版本: ${content.versionCode}\n")
-                }
-                if (parser.isPackageInstalled(content.packageName)) {
-                    val installedVer = parser.getInstalledVersionCode(content.packageName)
-                    append("安装状态: ✅ 已安装")
-                    if (installedVer != null) append(" (v$installedVer)")
-                    append("\n")
-                    if (content.versionCode != null && installedVer != null) {
-                        if (content.versionCode > installedVer) append("⬆️ 有新版本可用!\n")
-                        else if (content.versionCode == installedVer) append("ℹ️ 版本相同\n")
-                    }
-                } else {
-                    append("安装状态: ❌ 未安装\n")
-                }
-                append("\n")
-            }
+    private fun displayContent(content: XAPKContent, filePath: String) {
+        val sb = StringBuilder()
+        sb.appendLine("📦 ${content.fileName}")
+        sb.appendLine("大小: ${formatSize(content.fileSize)}")
+        sb.appendLine()
 
-            if (content.apkEntries.isNotEmpty()) {
-                if (content.apkEntries.size == 1) {
-                    append("📱 APK: ${content.apkEntries.first().name}")
-                    append(" (${formatSize(content.apkEntries.first().size)})\n")
-                } else {
-                    append("📱 APK 分片包 (${content.apkEntries.size}个):\n")
-                    for (apk in content.apkEntries) {
-                        append("  ├ ${apk.name}\n")
-                        append("  └ ${formatSize(apk.size)}\n")
-                    }
-                }
+        if (content.packageName != null) {
+            sb.appendLine("📱 包名: ${content.packageName}")
+            content.versionCode?.let { sb.appendLine("版本: $it") }
+            if (parser.isPackageInstalled(content.packageName)) {
+                val v = parser.getInstalledVersionCode(content.packageName)
+                sb.append("安装状态: ✅ 已安装")
+                v?.let { sb.append(" (v$it)") }
+                sb.appendLine()
+            } else {
+                sb.appendLine("安装状态: ❌ 未安装")
             }
-
-            if (content.obbEntries.isNotEmpty()) {
-                append("\n💾 OBB 扩展数据 (${content.obbEntries.size}个):\n")
-                for (obb in content.obbEntries) {
-                    append("  ├ ${obb.name}\n")
-                    append("  └ 大小: ${formatSize(obb.size)}\n")
-                }
-            }
-
-            if (content.hasManifestJson) {
-                append("\n📋 manifest.json: ✓\n")
-            }
+            sb.appendLine()
         }
 
-        binding.fileInfoText.text = info
+        if (content.apkEntries.size == 1) {
+            val a = content.apkEntries.first()
+            sb.appendLine("📱 APK: ${a.name} (${formatSize(a.size)})")
+        } else {
+            sb.appendLine("📱 APK 分片包 (${content.apkEntries.size}个):")
+            content.apkEntries.forEach { sb.appendLine("  ├ ${it.name}") }
+        }
+
+        if (content.obbEntries.isNotEmpty()) {
+            sb.appendLine()
+            sb.appendLine("💾 OBB (${content.obbEntries.size}个):")
+            content.obbEntries.forEach { sb.appendLine("  ├ ${it.name} (${formatSize(it.size)})") }
+        }
+
+        binding.fileInfoText.text = sb.toString()
         binding.currentFilePath.text = filePath
         binding.btnInstall.isEnabled = !isInstalling
         showStatus("就绪，可以安装")
     }
 
+    // ─── 安装流程 ────────────────────────────────────────
+
     private fun startInstall(file: File) {
         isInstalling = true
         binding.btnInstall.isEnabled = false
         binding.btnInstall.text = "安装中..."
-        installer.install(file, this)
+
+        installer.install(file, this) { status, message, pkgName ->
+            // Split APK 安装结果回调（在主线程）
+            runOnUiThread {
+                isInstalling = false
+                binding.btnInstall.isEnabled = true
+                binding.btnInstall.text = "重新安装"
+
+                if (status == 0) {
+                    showStatus("✅ 安装成功！")
+                    AlertDialog.Builder(this)
+                        .setTitle("安装完成")
+                        .setMessage("${pkgName ?: "应用"} 安装成功！\n可在桌面或应用列表中找到。")
+                        .setPositiveButton("打开应用") { _, _ ->
+                            try {
+                                val launchIntent = packageManager.getLaunchIntentForPackage(pkgName ?: "")
+                                if (launchIntent != null) startActivity(launchIntent)
+                                else showToast("无法找到启动入口")
+                            } catch (_: Exception) { showToast("无法启动应用") }
+                        }
+                        .setNegativeButton("好的", null)
+                        .show()
+                } else {
+                    showStatus("❌ 安装失败")
+                    AlertDialog.Builder(this)
+                        .setTitle("安装失败")
+                        .setMessage("错误码: $status\n$message")
+                        .setPositiveButton("好的", null)
+                        .show()
+                }
+            }
+        }
     }
 
     private fun checkStoragePermission(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
-                showToast("需要文件管理权限来浏览文件")
-                val intent = Intent(
+                showToast("需要文件管理权限")
+                installPermLauncher.launch(Intent(
                     Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                     Uri.parse("package:$packageName")
-                )
-                installPermissionLauncher.launch(intent)
+                ))
                 return false
             }
         }
         return true
     }
 
+    // ─── InstallListener 回调 ────────────────────────────
+
     override fun onProgress(message: String) {
         runOnUiThread { showStatus(message) }
     }
 
     override fun onComplete(content: XAPKContent) {
-        runOnUiThread {
-            isInstalling = false
-            binding.btnInstall.isEnabled = true
-            binding.btnInstall.text = "重新安装"
-            showStatus("✅ 安装完成！Split APK 已提交系统安装器，OBB 已复制")
-            showToast("安装完成，请在系统安装器中确认")
-        }
+        // 单 APK 路径到此 (系统安装器已弹出)
+        // Split APK 路径也有此回调，但真正结果在 sessionCallback 中
     }
 
     override fun onError(message: String) {
@@ -256,20 +260,15 @@ class MainActivity : AppCompatActivity(), InstallerHelper.InstallListener {
         }
     }
 
-    private fun showStatus(text: String) {
-        binding.statusText.text = text
-    }
+    // ─── 辅助 ────────────────────────────────────────────
 
-    private fun showToast(text: String) {
-        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
-    }
+    private fun showStatus(text: String) { binding.statusText.text = text }
+    private fun showToast(text: String) { Toast.makeText(this, text, Toast.LENGTH_SHORT).show() }
 
-    private fun formatSize(bytes: Long): String {
-        return when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
-            bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-            else -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-        }
+    private fun formatSize(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+        bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        else -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
     }
 }
